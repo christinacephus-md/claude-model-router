@@ -1,12 +1,30 @@
 # Claude Model Router v2.0
 
-Intelligent model routing and cost tracking for Claude Code CLI.
+<p align="center">
+  <img src="model-router.jpg" alt="Claude Model Router - Intelligent Routing and Cost Tracking" width="700">
+</p>
 
-Analyzes every prompt you submit and recommends the optimal Claude model (Haiku/Sonnet/Opus) based on task complexity. Logs all routing decisions so you can see exactly where your tokens are going.
+<p align="center">
+  <strong>Stop burning Opus tokens on "yes" and "looks good."</strong><br>
+  A Claude Code hook that watches every prompt, scores its complexity, and tells you exactly which model to use — so you spend smarter on API billing without thinking about it.
+</p>
 
-## Why
+<p align="center">
+  <a href="#install">Install in 30 seconds</a> &bull;
+  <a href="#what-you-get">Features</a> &bull;
+  <a href="#cost-tracking">Cost Tracking</a> &bull;
+  <a href="examples/">Examples</a>
+</p>
 
-Running Opus for everything costs 60x more than Haiku. Most prompts ("yes", "show me the file", "looks good") don't need Opus. This hook catches those and tells you to downshift, saving 30-50% on API billing.
+---
+
+## The Problem
+
+Running Opus for everything costs **60x more than Haiku**. But most prompts — "yes", "show me the file", "looks good", "do it" — don't need Opus. Without routing, you're lighting money on fire every time you send a quick follow-up.
+
+## The Fix
+
+Model Router analyzes every prompt across 5 factors and recommends the cheapest model that can handle the job. It runs alongside `/fast` mode with zero conflict — the hook fires on prompt submit, `/fast` handles output speed. They stack.
 
 | Model | Input/1M | Output/1M | Best For |
 |---|---|---|---|
@@ -174,11 +192,11 @@ Add this to your `~/.claude/settings.json`:
 }
 ```
 
-## Toggling
+## Works With /fast Mode
 
-When you want raw speed without routing recommendations (e.g., `/fast` mode), the hook still runs but doesn't block anything -- it just prints a recommendation. You can ignore it.
+Verified: the hook runs on `UserPromptSubmit` (before the model processes your prompt), and `/fast` mode controls output streaming speed on the same model. They operate on different layers and stack cleanly — you get routing recommendations AND fast output simultaneously. No conflict, no performance hit.
 
-To fully disable, remove the hook from `settings.json` or run `./uninstall.sh`.
+To fully disable routing, remove the hook from `settings.json` or run `./uninstall.sh`.
 
 ## Testing
 
