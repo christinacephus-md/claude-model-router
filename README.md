@@ -1,66 +1,62 @@
-# Claude Model Router v2.0
+# Claude Model Router v3.0
 
 <p align="center">
   <img src="model-router.jpg" alt="Claude Model Router - Intelligent Routing and Cost Tracking" width="700">
 </p>
 
 <p align="center">
-  <strong>Stop burning Opus tokens on "yes" and "looks good."</strong><br>
-  A Claude Code hook that watches every prompt, scores its complexity, and tells you exactly which model to use — so you spend smarter on API billing without thinking about it.
+  <strong>The full Claude Code discipline layer.</strong><br>
+  Model routing, git hygiene enforcement, commit quality gates, session telemetry, and DX automation hooks — installed with one command.
 </p>
 
 <p align="center">
-  <a href="#install">Install in 30 seconds</a> &bull;
+  <a href="#install">Install</a> &bull;
   <a href="#what-you-get">Features</a> &bull;
-  <a href="#cost-tracking">Cost Tracking</a> &bull;
-  <a href="examples/">Examples</a>
+  <a href="#git-hygiene">Git Hygiene</a> &bull;
+  <a href="#claude-code-hooks">Hooks</a> &bull;
+  <a href="#cost-tracking">Cost Tracking</a>
 </p>
 
 ---
 
 ## The Problem
 
-Running Opus for everything costs **60x more than Haiku**. But most prompts — "yes", "show me the file", "looks good", "do it" — don't need Opus. Without routing, you're lighting money on fire every time you send a quick follow-up.
+1. Running Opus for "yes" and "looks good" burns 60x more than Haiku
+2. Claude Code injects `Co-Authored-By` and `Generated with Claude Code` into your git history
+3. No visibility into where tokens are going across projects
+4. No guardrails on commit message quality
+5. No session-level telemetry for async team handoffs
 
 ## The Fix
 
-Model Router analyzes every prompt across 5 factors and recommends the cheapest model that can handle the job. It runs alongside `/fast` mode with zero conflict — the hook fires on prompt submit, `/fast` handles output speed. They stack.
+v3 is a single install that covers all five. Model routing tells you when to downshift. Git hooks strip AI trailers before they hit your history. Conventional commit gates enforce message quality. Session summaries log what happened. All of it stacks with `/fast` mode.
 
-| Model | Input/1M | Output/1M | Best For |
-|---|---|---|---|
-| Haiku | $0.25 | $1.25 | Reads, lookups, follow-ups |
-| Sonnet | $3.00 | $15.00 | Standard code gen, moderate edits |
-| Opus | $15.00 | $75.00 | Architecture, security, deep reasoning |
+---
 
 ## Install
 
 ```bash
 git clone https://github.com/christinacephus-md/claude-model-router.git
 cd claude-model-router
-chmod +x install.sh
-./install.sh
-```
 
-This copies the hook to `~/.claude/plugins/model-router/` and prints instructions for wiring it into your `~/.claude/settings.json`.
-
-To auto-merge into an existing settings file:
-
-```bash
+# Core install (routing + Claude Code hooks)
 ./install.sh --force
+
+# Full install (add git hooks too)
+./install.sh --all
+
+# Update existing install (preserves your config)
+./install.sh --update --force
 ```
+
+---
 
 ## What You Get
 
-### 1. Prompt Analysis Hook
+### 1. Model Routing (UserPromptSubmit)
 
-Every prompt gets scored across 5 factors:
-- **Keywords** - simple vs complex task indicators
-- **Tool complexity** - single file vs multi-file vs planning
-- **File context** - how many files referenced
-- **Inference depth** - prompt length, multi-step indicators
-- **Conversation depth** - follow-ups and continuations auto-route to Haiku
+Every prompt scored across 5 factors: keywords, tool complexity, file context, inference depth, conversation depth. Short follow-ups auto-route to Haiku.
 
-Output before each response:
 ```
 +---------------------------------------------------------+
 |  Model Router v2.0 - Cost Optimization                  |
@@ -69,67 +65,93 @@ Output before each response:
   Analysis:
     Keywords: Simple=2 Complex=0
     Tool Complexity: LOW
-    File Context: single_file
     Inference Depth: SHALLOW
-    Conversation: FRESH
-    Score: -5
+    Conversation: CONTINUATION
+    Score: -6
 
   Recommendation: /model haiku
-    Reason: Simple query, single operation
-
-  Cost (per 1M input tokens):
-    Haiku:  $0.25   Sonnet: $3.00   Opus: $15.00
 
   Today: 23 prompts | H:14 S:7 O:2 | Est: $1.84
 ```
 
-### 2. Cost Tracking
+### 2. Git Hygiene (commit-msg, prepare-commit-msg, pre-push)
 
-Every routing decision is logged to CSV at `~/.claude/plugins/model-router/logs/cost_log.csv`. Run reports:
+Three git hooks working together to keep your history clean:
+
+**prepare-commit-msg** — strips AI trailers before the editor opens:
+- `Co-Authored-By: Claude Code <noreply@anthropic.com>` — removed
+- `Generated with [Claude Code]` — removed
+- Developer never sees them
+
+**commit-msg** — conventional commit enforcement:
+- Blocks commits that don't match `feat|fix|chore|docs|refactor|test|style|ci|perf|build|revert:`
+- Warns on subject lines >72 chars
+- Hints when past tense is used ("Added" -> use imperative)
+- Bypass with `--no-verify` when needed
+
+**pre-push** — last line of defense:
+- Scans all outgoing commits for leaked AI trailers
+- Blocks the push with a clear message showing which commits are dirty
+- Bypass with `--no-verify`
+
+Install git hooks globally or per-repo:
+```bash
+# Global (all repos)
+git config --global core.hooksPath ~/.claude/plugins/model-router/git-hooks
+
+# Per-repo
+ln -sf ~/.claude/plugins/model-router/hooks/commit-msg .git/hooks/commit-msg
+ln -sf ~/.claude/plugins/model-router/hooks/prepare-commit-msg .git/hooks/prepare-commit-msg
+ln -sf ~/.claude/plugins/model-router/hooks/pre-push .git/hooks/pre-push
+```
+
+### 3. PreToolUse Hook — Git Command Interception
+
+Fires before Bash tool calls. Catches `git commit`, `gh pr create`, and `git push` commands:
+- Warns when AI markers are present in commit messages or PR bodies
+- Logs git push operations for audit trail
+
+### 4. PostToolUse Hook — DX Feedback
+
+Fires after Write, Edit, and Bash tool calls:
+- Tracks all file changes to a log for session summary
+- Detects when a source file is modified that has a corresponding test file — reminds you to update tests
+- Logs all bash commands for session replay
+
+### 5. Stop Hook — Session Summary
+
+When Claude Code finishes a turn, auto-generates:
+```
++---------------------------------------------------------+
+|  Session Summary                                        |
++---------------------------------------------------------+
+
+  Routing:  47 prompts (H:28 S:15 O:4)
+  Est cost: $3.42 today
+  Files:    12 changes tracked
+  Git ops:  3 operations
+```
+
+Appends to `~/.claude/plugins/model-router/logs/session_summary.log` for async handoffs.
+
+### 6. Cost Tracking + Budget Alerts
 
 ```bash
 # Today
 python3 ~/.claude/plugins/model-router/hooks/cost_report.py
 
-# This week, by project
+# This week by project
 python3 ~/.claude/plugins/model-router/hooks/cost_report.py --week --project
-
-# This month
-python3 ~/.claude/plugins/model-router/hooks/cost_report.py --month
 
 # All time
 python3 ~/.claude/plugins/model-router/hooks/cost_report.py --all
 ```
 
-### 3. Budget Alerts
+Budget alerts at 80% of daily/weekly limits. Configure in `config/budget.json`.
 
-Set daily/weekly limits in `~/.claude/plugins/model-router/config/budget.json`:
+### 7. Router Advisor Agent + Slash Commands
 
-```json
-{
-  "daily_limit_usd": 10.00,
-  "weekly_limit_usd": 50.00
-}
-```
-
-When you hit 80% of a limit, the hook warns you inline.
-
-### 4. Router Advisor Agent
-
-A subagent you can invoke for a second opinion on model selection:
-
-```
-# In Claude Code, if you've symlinked the agent:
-@router-advisor Should I use Opus for this refactoring task?
-```
-
-### 5. Slash Commands
-
-- `/cost-report` - weekly cost breakdown by project
-- `/budget-check` - current spend vs budget limits
-
-To use agents and commands in a project, symlink them:
-
+Symlink into any project:
 ```bash
 mkdir -p .claude/agents .claude/commands
 ln -s ~/.claude/plugins/model-router/agents/router-advisor.md .claude/agents/
@@ -137,10 +159,17 @@ ln -s ~/.claude/plugins/model-router/commands/cost-report.md .claude/commands/
 ln -s ~/.claude/plugins/model-router/commands/budget-check.md .claude/commands/
 ```
 
+---
+
+## Works With /fast Mode
+
+The routing hook runs on `UserPromptSubmit` (before model processing). `/fast` controls output speed. They operate on different layers and stack cleanly.
+
+---
+
 ## Project-Specific Patterns
 
-Drop a `.claude/router-patterns.json` in any project to extend the base keywords:
-
+Drop `.claude/router-patterns.json` in any project:
 ```json
 {
   "haiku_keywords": ["lookup patient", "check appointment"],
@@ -148,115 +177,80 @@ Drop a `.claude/router-patterns.json` in any project to extend the base keywords
 }
 ```
 
-These merge with the global patterns -- project keywords extend, not replace.
+---
 
-## Customization
+## settings.json Reference
 
-### Adjust Thresholds
-
-In `model_router.py`, the scoring thresholds:
-```python
-score >= 7   -> Opus
-score <= -2  -> Haiku
-else         -> Sonnet
-```
-
-Lower the Opus threshold to be more aggressive about routing to Opus. Raise the Haiku threshold to route more to Haiku.
-
-### Edit Keywords
-
-`~/.claude/plugins/model-router/config/patterns.json` -- add your team's domain-specific terms.
-
-### Budget Limits
-
-`~/.claude/plugins/model-router/config/budget.json` -- set to `null` to disable.
-
-## Settings.json Hook Format
-
-Add this to your `~/.claude/settings.json`:
-
+Full hooks block that `--force` installs:
 ```json
 {
   "hooks": {
     "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 ~/.claude/plugins/model-router/hooks/model_router.py"
-          }
-        ]
-      }
+      { "hooks": [{ "type": "command", "command": "python3 ~/.claude/plugins/model-router/hooks/model_router.py" }] }
+    ],
+    "PreToolUse": [
+      { "matcher": "Bash", "hooks": [{ "type": "command", "command": "bash ~/.claude/plugins/model-router/hooks/pre_tool_use.sh" }] }
+    ],
+    "PostToolUse": [
+      { "matcher": "Write|Edit|Bash", "hooks": [{ "type": "command", "command": "bash ~/.claude/plugins/model-router/hooks/post_tool_use.sh" }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "bash ~/.claude/plugins/model-router/hooks/stop_hook.sh" }] }
     ]
   }
 }
 ```
 
-## Works With /fast Mode
-
-Verified: the hook runs on `UserPromptSubmit` (before the model processes your prompt), and `/fast` mode controls output streaming speed on the same model. They operate on different layers and stack cleanly — you get routing recommendations AND fast output simultaneously. No conflict, no performance hit.
-
-To fully disable routing, remove the hook from `settings.json` or run `./uninstall.sh`.
+---
 
 ## Testing
 
 ```bash
-chmod +x test_hook.sh
 ./test_hook.sh
 ```
 
-## Uninstall
+21 tests covering routing accuracy, cost reports, git trailer stripping, conventional commit enforcement, past tense detection, and all Claude Code hooks.
 
-```bash
-chmod +x uninstall.sh
-./uninstall.sh
-```
-
-Preserves your cost logs by default.
+---
 
 ## Structure
 
 ```
 claude-model-router/
-├── README.md
-├── install.sh                    # One-command install
-├── uninstall.sh                  # Clean removal
-├── test_hook.sh                  # Test suite
+├── install.sh                     # One-command install (--force, --git-hooks, --update, --all)
+├── uninstall.sh                   # Clean removal (preserves logs)
+├── test_hook.sh                   # 21-test suite
 ├── plugin/
-│   ├── plugin.json               # Package metadata
+│   ├── plugin.json
 │   ├── hooks/
-│   │   ├── hooks.json            # Hook registration
-│   │   ├── model_router.py       # Main routing engine
-│   │   └── cost_report.py        # Cost report generator
+│   │   ├── model_router.py        # 5-factor routing engine
+│   │   ├── cost_report.py         # Cost report generator
+│   │   ├── pre_tool_use.sh        # Git command interception
+│   │   ├── post_tool_use.sh       # File change tracking + test reminders
+│   │   └── stop_hook.sh           # Session summary generator
 │   └── config/
-│       ├── patterns.json         # Keyword patterns (with healthcare)
-│       └── budget.json           # Budget limits
+│       ├── patterns.json          # Routing keywords (with healthcare)
+│       └── budget.json            # Daily/weekly limits
+├── git-hooks/
+│   ├── prepare-commit-msg         # Strip AI trailers before editor
+│   ├── commit-msg                 # Conventional commit + final trailer strip
+│   └── pre-push                   # Block pushes with leaked AI trailers
 ├── agents/
-│   └── router-advisor.md         # Model selection subagent
+│   └── router-advisor.md          # Model selection subagent
 ├── commands/
-│   ├── cost-report.md            # /cost-report slash command
-│   └── budget-check.md           # /budget-check slash command
+│   ├── cost-report.md             # /cost-report slash command
+│   └── budget-check.md            # /budget-check slash command
 ├── examples/
 │   ├── custom_patterns.json
 │   └── healthcare_patterns.json
-├── docs/
-│   ├── README.md
-│   └── QUICKSTART.md
-├── LICENSE
-├── CONTRIBUTING.md
-└── PUBLISH.md
+└── docs/
 ```
-
-## Requirements
-
-- Python 3.8+
-- Claude Code CLI
-- macOS, Linux, or WSL
 
 ## Version History
 
-- **v2.0.0** - Cost tracking, budget alerts, conversation depth analysis, agents, commands, project-specific patterns
-- **v1.0.0** - Initial release with multi-factor keyword routing
+- **v3.0.0** - Git hygiene (3 hooks), PreToolUse/PostToolUse/Stop Claude Code hooks, conventional commit enforcement, session telemetry, restructured install with --update/--git-hooks/--all, JSON validation
+- **v2.0.0** - Cost tracking, budget alerts, conversation depth, agents, commands
+- **v1.0.0** - Multi-factor keyword routing
 
 ## Author
 

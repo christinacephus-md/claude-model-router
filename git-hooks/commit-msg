@@ -1,0 +1,80 @@
+#!/bin/bash
+# Claude Model Router v3 - commit-msg hook
+# Final cleanup of AI trailers + conventional commit enforcement.
+# Fires after the message is written but before the commit object is created.
+
+COMMIT_MSG_FILE="$1"
+
+if [ ! -f "$COMMIT_MSG_FILE" ]; then
+  exit 0
+fi
+
+# --- Strip AI trailers (redundant with prepare-commit-msg, but catches edge cases) ---
+
+sed -i.bak -E '/^[[:space:]]*Co-[Aa]uthored-[Bb]y:.*[Cc]laude/d' "$COMMIT_MSG_FILE"
+sed -i.bak -E '/^[[:space:]]*Co-[Aa]uthored-[Bb]y:.*noreply@anthropic/d' "$COMMIT_MSG_FILE"
+sed -i.bak -E '/^[[:space:]]*Generated-by:/d' "$COMMIT_MSG_FILE"
+sed -i.bak -E '/^[[:space:]]*🤖.*[Gg]enerated with.*[Cc]laude/d' "$COMMIT_MSG_FILE"
+sed -i.bak -E '/^[[:space:]]*Generated with \[Claude Code\]/d' "$COMMIT_MSG_FILE"
+
+# Clean trailing blank lines
+sed -i.bak -e :a -e '/^\n*$/{$d;N;ba' -e '}' "$COMMIT_MSG_FILE"
+rm -f "${COMMIT_MSG_FILE}.bak"
+
+# --- Conventional Commit Validation ---
+
+# Read the subject line (first non-comment, non-empty line)
+SUBJECT=$(grep -v '^#' "$COMMIT_MSG_FILE" | grep -v '^$' | head -1)
+
+if [ -z "$SUBJECT" ]; then
+  echo "ERROR: Empty commit message."
+  exit 1
+fi
+
+# Check conventional commit format
+CONVENTIONAL_PATTERN="^(feat|fix|chore|docs|refactor|test|style|ci|perf|build|revert)(\(.+\))?!?:"
+if ! echo "$SUBJECT" | grep -qE "$CONVENTIONAL_PATTERN"; then
+  echo ""
+  echo "  COMMIT BLOCKED: Not a conventional commit message."
+  echo ""
+  echo "  Your message:  $SUBJECT"
+  echo ""
+  echo "  Expected format: <type>(<scope>): <description>"
+  echo ""
+  echo "  Valid types: feat, fix, chore, docs, refactor, test, style, ci, perf, build, revert"
+  echo ""
+  echo "  Examples:"
+  echo "    feat: add user authentication"
+  echo "    fix(api): handle null response from upstream"
+  echo "    docs: update README with install instructions"
+  echo ""
+  echo "  To bypass: git commit --no-verify"
+  echo ""
+  exit 1
+fi
+
+# Check subject line length
+SUBJECT_LEN=${#SUBJECT}
+if [ "$SUBJECT_LEN" -gt 72 ]; then
+  echo ""
+  echo "  WARNING: Subject line is $SUBJECT_LEN chars (recommended max: 72)."
+  echo "  Consider shortening the subject and adding details in the body."
+  echo ""
+  # Warning only, don't block
+fi
+
+# Check for past tense (common mistake)
+DESC=$(echo "$SUBJECT" | sed -E 's/^[^:]+:[[:space:]]*//')
+FIRST_WORD=$(echo "$DESC" | awk '{print $1}')
+case "$FIRST_WORD" in
+  Added|Fixed|Updated|Changed|Removed|Deleted|Implemented|Created|Moved|Renamed)
+    echo ""
+    echo "  HINT: Use imperative mood in commit messages."
+    echo "  Instead of \"$FIRST_WORD\", try the present tense."
+    echo "  Example: \"fix: handle error\" not \"fix: Fixed error\""
+    echo ""
+    # Hint only, don't block
+    ;;
+esac
+
+exit 0

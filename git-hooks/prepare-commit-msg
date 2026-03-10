@@ -1,0 +1,32 @@
+#!/bin/bash
+# Claude Model Router v3 - prepare-commit-msg hook
+# Strips AI-generated trailers before the editor opens.
+# Runs before the developer sees the message, so they never have to manually delete.
+
+COMMIT_MSG_FILE="$1"
+COMMIT_SOURCE="$2"
+
+# Only process regular commits (not merges, squashes, or amends with explicit messages)
+case "$COMMIT_SOURCE" in
+  merge|squash) exit 0 ;;
+esac
+
+if [ ! -f "$COMMIT_MSG_FILE" ]; then
+  exit 0
+fi
+
+# Strip Claude Code auto-inserted trailers
+# Case-insensitive removal of known AI attribution patterns
+sed -i.bak -E '/^[[:space:]]*Co-[Aa]uthored-[Bb]y:.*[Cc]laude/d' "$COMMIT_MSG_FILE"
+sed -i.bak -E '/^[[:space:]]*Co-[Aa]uthored-[Bb]y:.*noreply@anthropic/d' "$COMMIT_MSG_FILE"
+sed -i.bak -E '/^[[:space:]]*Generated-by:/d' "$COMMIT_MSG_FILE"
+sed -i.bak -E '/^[[:space:]]*🤖.*[Gg]enerated with.*[Cc]laude/d' "$COMMIT_MSG_FILE"
+sed -i.bak -E '/^[[:space:]]*Generated with \[Claude Code\]/d' "$COMMIT_MSG_FILE"
+
+# Clean up trailing blank lines that remain after stripping
+sed -i.bak -e :a -e '/^\n*$/{$d;N;ba' -e '}' "$COMMIT_MSG_FILE"
+
+# Remove sed backup file
+rm -f "${COMMIT_MSG_FILE}.bak"
+
+exit 0
