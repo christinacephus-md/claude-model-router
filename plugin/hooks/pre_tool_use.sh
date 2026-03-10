@@ -1,7 +1,7 @@
 #!/bin/bash
 # Claude Model Router v3 - PreToolUse hook
 # Intercepts Bash tool calls containing git/gh commands.
-# Strips AI trailers from commit messages and PR bodies before they execute.
+# Actively strips AI trailers from commit messages and PR bodies before they execute.
 
 # Read the tool input from stdin
 INPUT=$(cat)
@@ -21,24 +21,45 @@ IS_GIT_PUSH=$(echo "$COMMAND" | grep -cE "git push" || true)
 
 if [ "$IS_GIT_COMMIT" -gt 0 ] || [ "$IS_GH_PR" -gt 0 ]; then
   # Check for AI markers in the command
-  HAS_MARKER=$(echo "$COMMAND" | grep -ciE "co-authored-by.*claude|generated.with.*claude|noreply@anthropic|🤖.*generated" || true)
+  HAS_MARKER=$(echo "$COMMAND" | grep -ciE "co-authored-by.*claude|generated.with.*claude|noreply@anthropic|🤖.*generated|🤖 Generated" || true)
 
   if [ "$HAS_MARKER" -gt 0 ]; then
-    echo ""
-    echo "  +---------------------------------------------------------+"
-    echo "  |  Git Hygiene - AI trailer detected in command           |"
-    echo "  +---------------------------------------------------------+"
-    echo ""
-    echo "  The command contains Claude Code attribution markers."
-    echo "  These will be stripped by your git hooks if installed."
-    echo ""
+    # Strip the AI trailers from the command itself
+    CLEANED=$(echo "$COMMAND" | sed -E \
+      -e 's/[[:space:]]*Co-[Aa]uthored-[Bb]y:[[:space:]]*Claude[^\n]*//' \
+      -e 's/[[:space:]]*Co-[Aa]uthored-[Bb]y:[^\n]*noreply@anthropic[^\n]*//' \
+      -e 's/[[:space:]]*Generated-by:[^\n]*//' \
+      -e 's/🤖[[:space:]]*Generated with \[Claude Code\]\(https:\/\/claude\.com\/claude-code\)//' \
+      -e 's/🤖[[:space:]]*Generated with \[Claude Code\][^\n]*//' \
+      -e 's/[[:space:]]*Generated with \[Claude Code\]\(https:\/\/claude\.com\/claude-code\)//' \
+      -e 's/[[:space:]]*Generated with \[Claude Code\][^\n]*//' \
+    )
+
+    # Remove leftover blank lines that pile up after stripping
+    CLEANED=$(echo "$CLEANED" | sed -E '/^[[:space:]]*$/{ N; /^\n[[:space:]]*$/d; }')
+
+    # Output the modified tool input as JSON so Claude Code uses the cleaned command
+    python3 -c "
+import json, sys
+cleaned = sys.stdin.read()
+print(json.dumps({'decision': 'modify', 'tool_input': {'command': cleaned}}))
+" <<< "$CLEANED"
+
+    # Also print a notice to stderr so the user sees it
+    echo "" >&2
+    echo "  +---------------------------------------------------------+" >&2
+    echo "  |  Git Hygiene - AI trailers stripped                      |" >&2
+    echo "  +---------------------------------------------------------+" >&2
+    echo "" >&2
     if [ "$IS_GIT_COMMIT" -gt 0 ]; then
-      echo "  Detected in: git commit message"
+      echo "  Cleaned: git commit message" >&2
     fi
     if [ "$IS_GH_PR" -gt 0 ]; then
-      echo "  Detected in: gh pr create body"
+      echo "  Cleaned: gh pr create body" >&2
     fi
-    echo ""
+    echo "" >&2
+
+    exit 0
   fi
 fi
 
