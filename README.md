@@ -59,7 +59,7 @@ Every prompt scored across 5 factors: keywords, tool complexity, file context, i
 
 ```
 +---------------------------------------------------------+
-|  Model Router v3.0 - Cost Optimization                  |
+|  Model Router v3.1 - Cost Optimization                  |
 +---------------------------------------------------------+
 
   Analysis:
@@ -248,6 +248,7 @@ claude-model-router/
 
 ## Version History
 
+- **v3.1.0** - Token-weighted cost estimates (prompt length / 4 + context overhead), per-row Opus baseline calculation, backward-compatible CSV format, honest savings metrics
 - **v3.0.0** - Git hygiene (3 hooks), PreToolUse/PostToolUse/Stop Claude Code hooks, conventional commit enforcement, session telemetry, restructured install with --update/--git-hooks/--all, JSON validation
 - **v2.0.0** - Cost tracking, budget alerts, conversation depth, agents, commands
 - **v1.0.0** - Multi-factor keyword routing

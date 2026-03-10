@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Claude Model Router v3.0
+Claude Model Router v3.1
 Intelligent model routing + cost tracking for Claude Code
 
 Analyzes prompts via multi-factor scoring and recommends optimal model.
@@ -218,6 +218,29 @@ def score_and_recommend(analysis):
 
 # --- Cost Tracking ---
 
+def estimate_tokens(prompt_length, model):
+    """Estimate input/output tokens from prompt character count.
+
+    Input tokens: prompt chars / 4 (standard English approximation)
+      + 2000 token base for conversation context (system prompt, tool
+      definitions, settings).  Minimum 500 tokens.
+
+    Output tokens: scaled by task complexity, proxied by which model
+      the router selected.  Simple tasks produce short responses;
+      complex tasks produce longer analysis.
+    """
+    est_input = max(500, int(prompt_length / 4) + 2000)
+
+    output_by_tier = {
+        'haiku':  400,   # short confirmations / lookups
+        'sonnet': 1200,  # code generation / edits
+        'opus':   2500,  # architecture / deep analysis
+    }
+    est_output = output_by_tier.get(model, 1200)
+
+    return est_input, est_output
+
+
 def ensure_log_dir():
     """Create logs directory if it doesn't exist."""
     log_dir = os.path.dirname(COST_LOG)
@@ -229,20 +252,22 @@ def ensure_log_dir():
             writer.writerow([
                 'timestamp', 'date', 'recommended_model', 'score',
                 'reason', 'prompt_length', 'project_dir',
-                'est_input_cost', 'est_output_cost'
+                'est_input_cost', 'est_output_cost',
+                'est_input_tokens', 'est_output_tokens'
             ])
 
 
 def log_routing_decision(model, score, reason, prompt, project_dir):
-    """Append routing decision to CSV log."""
+    """Append routing decision to CSV log with token-weighted cost estimates."""
     try:
         ensure_log_dir()
         now = datetime.now()
+        prompt_len = len(prompt)
 
-        # Estimate cost for a typical exchange at this model tier
-        # Rough: ~2K input tokens, ~1K output tokens per interaction
-        est_input = PRICING[model]['input'] * 2000 / 1_000_000
-        est_output = PRICING[model]['output'] * 1000 / 1_000_000
+        # Token-weighted estimation based on actual prompt size
+        est_in_tokens, est_out_tokens = estimate_tokens(prompt_len, model)
+        est_input_cost = PRICING[model]['input'] * est_in_tokens / 1_000_000
+        est_output_cost = PRICING[model]['output'] * est_out_tokens / 1_000_000
 
         with open(COST_LOG, 'a', newline='') as f:
             writer = csv.writer(f)
@@ -252,10 +277,12 @@ def log_routing_decision(model, score, reason, prompt, project_dir):
                 model,
                 score,
                 reason,
-                len(prompt),
+                prompt_len,
                 project_dir,
-                f'{est_input:.6f}',
-                f'{est_output:.6f}'
+                f'{est_input_cost:.6f}',
+                f'{est_output_cost:.6f}',
+                est_in_tokens,
+                est_out_tokens,
             ])
     except Exception:
         pass  # Never block the user
@@ -347,7 +374,7 @@ def main():
         output_lines = [
             '',
             '+---------------------------------------------------------+',
-            '|  Model Router v3.0 - Cost Optimization                  |',
+            '|  Model Router v3.1 - Cost Optimization                  |',
             '+---------------------------------------------------------+',
             '',
             f'  Analysis:',

@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """
-Cost Report Generator for Claude Model Router v3.0
+Cost Report Generator for Claude Model Router v3.1
 Reads the routing log and produces daily/weekly/monthly cost summaries.
+
+v3.1: Token-weighted cost estimates — uses actual prompt length to
+approximate token counts instead of flat per-prompt rates.
 
 Usage:
   python3 cost_report.py              # Today's summary
@@ -23,11 +26,45 @@ ROUTER_HOME = os.environ.get(
 )
 COST_LOG = os.path.join(ROUTER_HOME, 'logs', 'cost_log.csv')
 
+# Must match model_router.py pricing
+PRICING = {
+    'haiku':  {'input': 0.25,  'output': 1.25},
+    'sonnet': {'input': 3.00,  'output': 15.00},
+    'opus':   {'input': 15.00, 'output': 75.00},
+}
+
 PRICING_DISPLAY = {
     'haiku':  '$0.25/1M',
     'sonnet': '$3.00/1M',
     'opus':   '$15.00/1M',
 }
+
+# Output token estimates by model tier (matches model_router.py)
+OUTPUT_TOKENS_BY_TIER = {
+    'haiku':  400,
+    'sonnet': 1200,
+    'opus':   2500,
+}
+
+
+def estimate_tokens_from_row(row):
+    """Extract or recompute token estimates from a log row.
+
+    v3.1 rows include est_input_tokens / est_output_tokens columns.
+    Older v3.0 rows only have prompt_length — recompute on the fly.
+    """
+    est_in = row.get('est_input_tokens', '')
+    est_out = row.get('est_output_tokens', '')
+
+    if est_in and est_out:
+        return int(est_in), int(est_out)
+
+    # Fallback: recompute from prompt_length (v3.0 rows)
+    prompt_len = int(row.get('prompt_length', 0))
+    model = row.get('recommended_model', 'sonnet')
+    in_tokens = max(500, int(prompt_len / 4) + 2000)
+    out_tokens = OUTPUT_TOKENS_BY_TIER.get(model, 1200)
+    return in_tokens, out_tokens
 
 
 def load_log(start_date=None):
@@ -47,16 +84,29 @@ def load_log(start_date=None):
 
 
 def summarize(entries):
-    """Produce a summary from log entries."""
+    """Produce a summary with token-weighted cost estimates."""
     counts = defaultdict(int)
     est_cost = 0.0
+    opus_baseline = 0.0
     by_project = defaultdict(lambda: defaultdict(int))
     by_day = defaultdict(lambda: defaultdict(int))
 
     for e in entries:
         model = e.get('recommended_model', 'sonnet')
         counts[model] += 1
-        est_cost += float(e.get('est_input_cost', 0)) + float(e.get('est_output_cost', 0))
+
+        # Get token estimates for this row
+        in_tokens, out_tokens = estimate_tokens_from_row(e)
+
+        # Actual cost at the routed model
+        actual_in = PRICING[model]['input'] * in_tokens / 1_000_000
+        actual_out = PRICING[model]['output'] * out_tokens / 1_000_000
+        est_cost += actual_in + actual_out
+
+        # Baseline: what it would cost at Opus with the SAME token counts
+        baseline_in = PRICING['opus']['input'] * in_tokens / 1_000_000
+        baseline_out = PRICING['opus']['output'] * out_tokens / 1_000_000
+        opus_baseline += baseline_in + baseline_out
 
         project = e.get('project_dir', 'unknown')
         project_name = os.path.basename(project) if project else 'unknown'
@@ -66,17 +116,16 @@ def summarize(entries):
         by_day[day][model] += 1
 
     total = sum(counts.values())
-
-    # What it would have cost all on Opus
-    opus_est = total * (15.00 * 2000 / 1_000_000 + 75.00 * 1000 / 1_000_000)
+    savings = opus_baseline - est_cost if opus_baseline > 0 else 0
+    savings_pct = (savings / opus_baseline * 100) if opus_baseline > 0 else 0
 
     return {
         'counts': dict(counts),
         'total': total,
         'est_cost': est_cost,
-        'opus_baseline': opus_est,
-        'savings': opus_est - est_cost if opus_est > 0 else 0,
-        'savings_pct': ((opus_est - est_cost) / opus_est * 100) if opus_est > 0 else 0,
+        'opus_baseline': opus_baseline,
+        'savings': savings,
+        'savings_pct': savings_pct,
         'by_project': dict(by_project),
         'by_day': dict(by_day),
     }
@@ -107,7 +156,10 @@ def print_report(title, entries, show_projects=False):
     print()
     print(f'  Estimated Cost:     ${s["est_cost"]:.2f}')
     print(f'  All-Opus Baseline:  ${s["opus_baseline"]:.2f}')
-    print(f'  Estimated Savings:  ${s["savings"]:.2f} ({s["savings_pct"]:.0f}%)')
+    if s['savings'] >= 0:
+        print(f'  Estimated Savings:  ${s["savings"]:.2f} ({s["savings_pct"]:.0f}%)')
+    else:
+        print(f'  Over Baseline By:   ${abs(s["savings"]):.2f} ({abs(s["savings_pct"]):.0f}%)')
 
     if show_projects and s['by_project']:
         print()
@@ -125,6 +177,9 @@ def print_report(title, entries, show_projects=False):
             breakdown = ', '.join(f'{m[0].upper()}:{c}' for m, c in sorted(models.items()))
             print(f'    {day}: {total_d:>3} prompts ({breakdown})')
 
+    print()
+    print(f'  Note: Estimates use prompt length / 4 for input tokens + 2K')
+    print(f'  context overhead.  For exact figures, check console.anthropic.com')
     print()
 
 
