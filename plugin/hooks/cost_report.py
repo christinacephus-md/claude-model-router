@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Cost Report Generator for Claude Model Router v2.0
+Cost Report Generator for Claude Model Router v3.0
 Reads the routing log and produces daily/weekly/monthly cost summaries.
 
 Usage:

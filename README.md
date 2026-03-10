@@ -59,7 +59,7 @@ Every prompt scored across 5 factors: keywords, tool complexity, file context, i
 
 ```
 +---------------------------------------------------------+
-|  Model Router v2.0 - Cost Optimization                  |
+|  Model Router v3.0 - Cost Optimization                  |
 +---------------------------------------------------------+
 
   Analysis:

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Claude Model Router v2.0
+Claude Model Router v3.0
 Intelligent model routing + cost tracking for Claude Code
 
 Analyzes prompts via multi-factor scoring and recommends optimal model.
@@ -347,7 +347,7 @@ def main():
         output_lines = [
             '',
             '+---------------------------------------------------------+',
-            '|  Model Router v2.0 - Cost Optimization                  |',
+            '|  Model Router v3.0 - Cost Optimization                  |',
             '+---------------------------------------------------------+',
             '',
             f'  Analysis:',
