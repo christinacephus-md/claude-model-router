@@ -1,7 +1,7 @@
 # Claude Model Router v4.0
 
 <p align="center">
-  <img src="model-router.jpg" alt="Claude Model Router - Intelligent Routing and Cost Tracking" width="700">
+  <img src="model-router-v4.png" alt="Claude Model Router v4.0 - Intelligent Routing and Cost Optimization" width="700">
 </p>
 
 <p align="center">
