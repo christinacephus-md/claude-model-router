@@ -22,14 +22,15 @@
 ## The Problem
 
 1. Running Opus for "yes" and "looks good" burns 60x more than Haiku
-2. Claude Code injects `Co-Authored-By` and `Generated with Claude Code` into your git history
-3. No visibility into where tokens are going across projects
-4. No guardrails on commit message quality
-5. No session-level telemetry for async team handoffs
+2. Long conversations silently rack up cache write costs ($2-4/prompt on Opus at 100K+ context)
+3. Claude Code injects `Co-Authored-By` and `Generated with Claude Code` into your git history
+4. No visibility into where tokens are going across projects
+5. No guardrails on commit message quality
+6. No session-level telemetry for async team handoffs
 
 ## The Fix
 
-v4 is a single install that covers all five. Model routing uses tiered keyword weights, word boundary matching, and downgrade signals to aggressively route simple tasks to Haiku. Git hooks strip AI trailers before they hit your history. Conventional commit gates enforce message quality. Session summaries log what happened. All of it stacks with `/fast` mode.
+v4 is a single install that covers all six. Model routing uses tiered keyword weights, word boundary matching, and downgrade signals to aggressively route simple tasks to Haiku. Git hooks strip AI trailers before they hit your history. Conventional commit gates enforce message quality. Session summaries log what happened. All of it stacks with `/fast` mode.
 
 ---
 
@@ -78,6 +79,15 @@ Every prompt scored across 5 factors with tiered keyword weights, word boundary 
 
   Today: 23 prompts | H:16 S:5 O:2 | Est: $1.12
   Saved vs all-Opus: $4.38
+  Session: 8 prompts (~40K context)
+```
+
+At deeper sessions, cache cost alerts appear automatically:
+
+```
+  WARNING: Session depth: 25 prompts (~125K context)
+    Cache write/prompt: Opus=$2.34  Sonnet=$0.47
+    -> Cache costs growing — try /compact or start fresh
 ```
 
 ### 2. Git Hygiene (commit-msg, prepare-commit-msg, pre-push)
@@ -140,7 +150,19 @@ When Claude Code finishes a turn, auto-generates:
 
 Appends to `~/.claude/plugins/model-router/logs/session_summary.log` for async handoffs.
 
-### 6. Cost Tracking + Budget Alerts
+### 6. Session Depth Tracking + Cache Cost Alerts
+
+Tracks prompt count per session and warns when cache write costs are growing. Based on real billing data showing cache writes as 47% of total spend.
+
+| Threshold | Level | Action |
+|-----------|-------|--------|
+| 15 prompts (~75K context) | TIP | Suggest `/compact` |
+| 25 prompts (~125K context) | WARNING | Cache costs growing, shows $/prompt |
+| 40 prompts (~200K context) | ALERT | Start a new conversation |
+
+Shows estimated cache write cost per prompt for Opus vs Sonnet so you can see the real cost of staying in a long session.
+
+### 7. Cost Tracking + Budget Alerts
 
 ```bash
 # Today
@@ -155,7 +177,7 @@ python3 ~/.claude/plugins/model-router/hooks/cost_report.py --all
 
 Budget alerts at 80% of daily/weekly limits. Configure in `config/budget.json`.
 
-### 7. Router Advisor Agent + Slash Commands
+### 8. Router Advisor Agent + Slash Commands
 
 Symlink into any project:
 ```bash
@@ -229,7 +251,7 @@ claude-model-router/
 ├── plugin/
 │   ├── plugin.json
 │   ├── hooks/
-│   │   ├── model_router.py        # 5-factor routing engine
+│   │   ├── model_router.py        # 6-factor routing engine + session tracking
 │   │   ├── cost_report.py         # Cost report generator
 │   │   ├── pre_tool_use.sh        # Git command interception
 │   │   ├── post_tool_use.sh       # File change tracking + test reminders
@@ -254,7 +276,7 @@ claude-model-router/
 
 ## Version History
 
-- **v4.0.0** - Tiered keyword weights (1-4 pts by signal strength), word boundary regex matching, downgrade signals ("just", "quickly", "trivial"), stricter opus threshold (10 vs 7), wider haiku band (score <= -1), short prompt cap (<60 chars can't trigger opus), expanded continuation detection (35+ phrases), savings tracking vs all-opus baseline
+- **v4.0.0** - Tiered keyword weights (1-4 pts by signal strength), word boundary regex matching, downgrade signals ("just", "quickly", "trivial"), stricter opus threshold (10 vs 7), wider haiku band (score <= -1), short prompt cap (<60 chars can't trigger opus), expanded continuation detection (35+ phrases), savings tracking vs all-opus baseline, session depth tracking with cache cost alerts at 15/25/40 prompt thresholds
 - **v3.1.0** - Token-weighted cost estimates (prompt length / 4 + context overhead), per-row Opus baseline calculation, backward-compatible CSV format, honest savings metrics
 - **v3.0.0** - Git hygiene (3 hooks), PreToolUse/PostToolUse/Stop Claude Code hooks, conventional commit enforcement, session telemetry, restructured install with --update/--git-hooks/--all, JSON validation
 - **v2.0.0** - Cost tracking, budget alerts, conversation depth, agents, commands
