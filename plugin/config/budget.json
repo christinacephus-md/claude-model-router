@@ -1,6 +1,7 @@
 {
-  "daily_limit_usd": 10.00,
-  "weekly_limit_usd": 50.00,
+  "daily_limit_usd": 40.00,
+  "weekly_limit_usd": 200.00,
+  "monthly_target_usd": 600.00,
   "alert_threshold_pct": 80,
-  "notes": "Set to null to disable. Alert fires when spend exceeds threshold %."
+  "notes": "Based on ~$888/mo actual spend. Target: reduce to $600/mo with v4.0 routing. Set to null to disable."
 }

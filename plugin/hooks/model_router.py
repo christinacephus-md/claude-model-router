@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 """
-Claude Model Router v3.1
+Claude Model Router v4.0
 Intelligent model routing + cost tracking for Claude Code
 
-Analyzes prompts via multi-factor scoring and recommends optimal model.
-Logs all routing decisions for cost visibility.
+Key improvements over v3.1:
+- Tiered keyword weights (not all opus keywords are equal)
+- Word boundary matching (prevents "plan" matching "explain")
+- Downgrade signals ("just", "quickly" push toward cheaper models)
+- Stricter opus threshold (10 vs 7) — Sonnet handles 90%+ of coding tasks
+- Wider haiku band (score <= 0 vs -2)
+- Short prompt auto-downgrade
+- Savings tracking vs always-opus baseline
 """
 
 import json
@@ -25,31 +31,59 @@ CONFIG_FILE = os.path.join(ROUTER_HOME, 'config', 'patterns.json')
 COST_LOG = os.path.join(ROUTER_HOME, 'logs', 'cost_log.csv')
 BUDGET_FILE = os.path.join(ROUTER_HOME, 'config', 'budget.json')
 
-# Model pricing (per 1M tokens, input)
+# Model pricing (per 1M tokens)
 PRICING = {
     'haiku':  {'input': 0.25,  'output': 1.25,  'cache_read': 0.025},
     'sonnet': {'input': 3.00,  'output': 15.00, 'cache_read': 0.30},
     'opus':   {'input': 15.00, 'output': 75.00, 'cache_read': 1.50},
 }
 
-DEFAULT_PATTERNS = {
-    "haiku_keywords": [
-        "typo", "format", "rename", "simple", "read file", "show me",
-        "what is", "list", "find file", "quick", "view", "display",
-        "check", "status", "version", "print", "cat", "head",
-        "look at", "open", "see the", "tell me", "which"
-    ],
-    "opus_keywords": [
-        "architect", "design system", "refactor entire", "debug across",
-        "investigate", "analyze", "security", "performance", "optimize",
-        "migration", "strategy", "tradeoff", "implement from scratch",
-        "plan", "audit", "review entire", "redesign", "scale",
-        "distributed", "microservices", "infrastructure", "terraform",
-        "think hard", "deep dive", "comprehensive", "surveil",
-        "synthesize", "research"
-    ],
-    "sonnet_default": True
+# --- Tiered Keyword Weights ---
+# Weight reflects how strongly each keyword signals that tier.
+# Higher weight = stronger signal. Word boundary matching is enforced.
+
+HAIKU_KEYWORDS = {
+    # Simple lookups / displays
+    'typo': 2, 'format': 2, 'rename': 2, 'simple': 3, 'read file': 2,
+    'show me': 2, 'what is': 2, 'list': 1, 'find file': 2, 'quick': 2,
+    'view': 1, 'display': 2, 'check': 1, 'status': 2, 'version': 2,
+    'print': 1, 'look at': 2, 'see the': 1, 'tell me': 1, 'which': 1,
+    # Additional haiku signals
+    'how many': 2, 'where is': 2, 'count': 1, 'summarize': 1,
+    'explain this': 2, 'what does': 2, 'help me understand': 2,
+    'show': 1, 'whats': 2, "what's": 2, 'describe': 1,
 }
+
+OPUS_KEYWORDS = {
+    # Tier 1: Strong opus signals (weight 4) - truly need deep reasoning
+    'architect': 4, 'design system': 4, 'refactor entire': 4,
+    'implement from scratch': 4, 'think hard': 4, 'deep dive': 4,
+    'redesign': 4, 'from the ground up': 4,
+    # Tier 2: Moderate opus signals (weight 2) - often need opus
+    'debug across': 2, 'review entire': 2, 'migration': 2,
+    'tradeoff': 2, 'distributed': 2, 'microservices': 2,
+    'infrastructure': 2, 'terraform': 2, 'comprehensive': 2,
+    'synthesize': 2,
+    # Tier 3: Weak opus signals (weight 1) - context-dependent
+    # These were causing false positives in v3.1
+    'investigate': 1, 'analyze': 1, 'security': 1, 'performance': 1,
+    'optimize': 1, 'strategy': 1, 'plan': 1, 'audit': 1, 'scale': 1,
+    'research': 1,
+    # Domain-specific (from project overlay)
+    'hipaa': 2, 'compliance': 2, 'encryption': 2, 'fhir': 2,
+    'hl7': 2, 'patient data security': 3, 'data governance': 2,
+    'privacy': 1, 'gdpr': 2, 'access control': 1, 'audit logging': 1,
+}
+
+# Downgrade signals — push AWAY from opus toward cheaper models
+DOWNGRADE_KEYWORDS = {
+    'just': 3, 'quickly': 3, 'briefly': 3, 'simply': 2, 'only': 1,
+    'small': 2, 'minor': 2, 'tiny': 2, 'little': 1, 'tweak': 3,
+    'fix this': 2, 'change this': 2, 'update this': 2, 'add this': 2,
+    'real quick': 4, 'one thing': 3, 'single': 1, 'straightforward': 3,
+    'easy': 2, 'basic': 2, 'trivial': 3,
+}
+
 
 # --- Pattern Loading ---
 
@@ -59,7 +93,7 @@ def load_patterns():
         with open(CONFIG_FILE, 'r') as f:
             base = json.load(f)
     except Exception:
-        base = DEFAULT_PATTERNS
+        base = {}
 
     # Check for project-specific overlay
     cwd = os.environ.get('CLAUDE_CWD', os.getcwd())
@@ -68,13 +102,13 @@ def load_patterns():
         try:
             with open(project_config, 'r') as f:
                 overlay = json.load(f)
-            # Merge: project keywords extend base
-            base['haiku_keywords'] = list(set(
-                base.get('haiku_keywords', []) + overlay.get('haiku_keywords', [])
-            ))
-            base['opus_keywords'] = list(set(
-                base.get('opus_keywords', []) + overlay.get('opus_keywords', [])
-            ))
+            # Merge overlay keywords into weighted dicts
+            for kw in overlay.get('haiku_keywords', []):
+                if kw not in HAIKU_KEYWORDS:
+                    HAIKU_KEYWORDS[kw] = 2
+            for kw in overlay.get('opus_keywords', []):
+                if kw not in OPUS_KEYWORDS:
+                    OPUS_KEYWORDS[kw] = 2
         except Exception:
             pass
 
@@ -83,18 +117,42 @@ def load_patterns():
 
 # --- Analysis Factors ---
 
+def match_keyword_weighted(prompt_lower, keyword_dict):
+    """Match keywords with word boundary enforcement and return weighted score."""
+    total_score = 0
+    hits = []
+
+    for keyword, weight in keyword_dict.items():
+        # Multi-word phrases: use simple containment
+        # Single words: use word boundary regex to prevent partial matches
+        if ' ' in keyword:
+            if keyword in prompt_lower:
+                total_score += weight
+                hits.append((keyword, weight))
+        else:
+            # \b prevents "plan" matching "explain", "plant", etc.
+            if re.search(r'\b' + re.escape(keyword) + r'\b', prompt_lower):
+                total_score += weight
+                hits.append((keyword, weight))
+
+    return total_score, hits
+
+
 def analyze_keywords(prompt, patterns):
-    """Factor 1: Keyword matching with weighted scoring."""
+    """Factor 1: Weighted keyword matching with word boundaries."""
     prompt_lower = prompt.lower()
 
-    simple_hits = [kw for kw in patterns['haiku_keywords'] if kw in prompt_lower]
-    complex_hits = [kw for kw in patterns['opus_keywords'] if kw in prompt_lower]
+    simple_score, simple_hits = match_keyword_weighted(prompt_lower, HAIKU_KEYWORDS)
+    complex_score, complex_hits = match_keyword_weighted(prompt_lower, OPUS_KEYWORDS)
+    downgrade_score, downgrade_hits = match_keyword_weighted(prompt_lower, DOWNGRADE_KEYWORDS)
 
     return {
-        'simple_score': len(simple_hits),
-        'complex_score': len(complex_hits),
-        'simple_hits': simple_hits[:3],
-        'complex_hits': complex_hits[:3],
+        'simple_score': simple_score,
+        'complex_score': complex_score,
+        'downgrade_score': downgrade_score,
+        'simple_hits': [h[0] for h in simple_hits[:3]],
+        'complex_hits': [h[0] for h in complex_hits[:3]],
+        'downgrade_hits': [h[0] for h in downgrade_hits[:3]],
     }
 
 
@@ -102,16 +160,19 @@ def analyze_tool_complexity(prompt):
     """Factor 2: Infer tool usage complexity from prompt content."""
     prompt_lower = prompt.lower()
 
+    # Only strong planning signals trigger high (removed weak words like "plan")
     planning = any(w in prompt_lower for w in [
-        'plan', 'design', 'architect', 'strategy', 'think hard',
-        'research', 'comprehensive', 'deep dive'
+        'design system', 'architect', 'think hard',
+        'comprehensive plan', 'deep dive into',
+        'implement from scratch', 'build out',
     ])
     multi_file = any(w in prompt_lower for w in [
-        'files', 'multiple', 'across', 'all', 'entire', 'whole',
-        'codebase', 'repo', 'project'
+        'multiple files', 'across the', 'entire codebase',
+        'whole project', 'all files', 'every file',
     ])
     single_op = any(w in prompt_lower for w in [
-        'this file', 'this function', 'this line', 'one thing'
+        'this file', 'this function', 'this line', 'this method',
+        'this component', 'this class', 'one thing', 'this test',
     ])
 
     if planning:
@@ -151,9 +212,9 @@ def analyze_inference_depth(prompt):
 
     complexity = length + (sentences * 20) + (steps * 50) + (numbered * 40) + (bullets * 30)
 
-    if complexity > 500 or steps > 2 or numbered > 2:
+    if complexity > 600 or steps > 3 or numbered > 3:
         return 'deep'
-    elif complexity > 150 or sentences > 2:
+    elif complexity > 200 or sentences > 3:
         return 'moderate'
     return 'shallow'
 
@@ -167,13 +228,16 @@ def analyze_conversation_depth(prompt):
         'yes', 'no', 'ok', 'sure', 'do it', 'go ahead', 'approved',
         'looks good', 'lgtm', 'thanks', 'perfect', 'great',
         'the bottom', 'that one', 'this one', 'yep', 'nope',
-        'continue', 'proceed', 'next'
+        'continue', 'proceed', 'next', 'sounds good', 'correct',
+        'right', 'exactly', 'yeah', 'ya', 'please', 'go for it',
+        'ship it', 'merge it', 'push it', 'commit', 'done',
+        'nice', 'cool', 'awesome', 'ok do it', 'confirmed',
     ]
-    if any(prompt_lower.startswith(c) for c in continuations) and len(prompt) < 80:
+    if any(prompt_lower.startswith(c) for c in continuations) and len(prompt) < 100:
         return 'continuation'
 
-    # Question-only prompts
-    if prompt.strip().endswith('?') and len(prompt) < 100:
+    # Question-only prompts under 120 chars
+    if prompt.strip().endswith('?') and len(prompt) < 120:
         return 'question'
 
     return 'fresh'
@@ -182,36 +246,50 @@ def analyze_conversation_depth(prompt):
 # --- Scoring Engine ---
 
 def score_and_recommend(analysis):
-    """Combine all factors into a model recommendation."""
+    """Combine all factors into a model recommendation.
+
+    v4.0 changes:
+    - Opus threshold raised: 10 (was 7)
+    - Haiku band widened: <= 0 (was -2)
+    - Downgrade signals reduce score
+    - Short prompt cap prevents opus for brief requests
+    """
     score = 0
 
-    # Factor 1: Keywords (strongest signal)
-    score += analysis['keywords']['complex_score'] * 3
-    score -= analysis['keywords']['simple_score'] * 2
+    # Factor 1: Keywords (strongest signal, now weighted)
+    score += analysis['keywords']['complex_score']   # already weighted
+    score -= analysis['keywords']['simple_score']     # already weighted
+    score -= analysis['keywords']['downgrade_score']  # NEW: downgrade signals
 
     # Factor 2: Tool complexity
-    tool_scores = {'high': 4, 'medium': 1, 'low': -1}
+    tool_scores = {'high': 3, 'medium': 1, 'low': -1}
     score += tool_scores.get(analysis['tool_complexity'], 0)
 
     # Factor 3: File context
-    file_scores = {'many_files': 3, 'multiple_files': 1, 'single_file': 0, 'no_files': 0}
+    file_scores = {'many_files': 2, 'multiple_files': 1, 'single_file': 0, 'no_files': 0}
     score += file_scores.get(analysis['file_context'], 0)
 
     # Factor 4: Inference depth
-    depth_scores = {'deep': 4, 'moderate': 1, 'shallow': -1}
+    depth_scores = {'deep': 3, 'moderate': 1, 'shallow': -1}
     score += depth_scores.get(analysis['inference_depth'], 0)
 
     # Factor 5: Conversation continuations are always cheap
     if analysis['conversation_depth'] == 'continuation':
-        return 'haiku', 'Short follow-up, no complex reasoning needed', score
-    if analysis['conversation_depth'] == 'question' and score < 3:
+        return 'haiku', 'Short follow-up', score
+    if analysis['conversation_depth'] == 'question' and score < 5:
         return 'haiku', 'Simple question', score
 
-    # Thresholds
-    if score >= 7:
+    # Short prompt cap: prompts under 60 chars can't trigger opus
+    prompt_len = analysis.get('prompt_length', 100)
+    if prompt_len < 60 and score >= 10:
+        score = 8  # Cap at sonnet range
+        return 'sonnet', 'Short prompt capped to Sonnet', score
+
+    # Thresholds (tighter than v3.1)
+    if score >= 10:
         return 'opus', 'Complex reasoning, multi-step planning', score
-    elif score <= -2:
-        return 'haiku', 'Simple query, single operation', score
+    elif score <= -1:
+        return 'haiku', 'Simple task', score
     else:
         return 'sonnet', 'Balanced code generation', score
 
@@ -219,26 +297,26 @@ def score_and_recommend(analysis):
 # --- Cost Tracking ---
 
 def estimate_tokens(prompt_length, model):
-    """Estimate input/output tokens from prompt character count.
-
-    Input tokens: prompt chars / 4 (standard English approximation)
-      + 2000 token base for conversation context (system prompt, tool
-      definitions, settings).  Minimum 500 tokens.
-
-    Output tokens: scaled by task complexity, proxied by which model
-      the router selected.  Simple tasks produce short responses;
-      complex tasks produce longer analysis.
-    """
+    """Estimate input/output tokens from prompt character count."""
     est_input = max(500, int(prompt_length / 4) + 2000)
 
     output_by_tier = {
-        'haiku':  400,   # short confirmations / lookups
-        'sonnet': 1200,  # code generation / edits
-        'opus':   2500,  # architecture / deep analysis
+        'haiku':  400,
+        'sonnet': 1200,
+        'opus':   2500,
     }
     est_output = output_by_tier.get(model, 1200)
 
     return est_input, est_output
+
+
+def calculate_savings(model, est_in_tokens, est_out_tokens):
+    """Calculate savings vs always using opus."""
+    opus_cost = (PRICING['opus']['input'] * est_in_tokens / 1_000_000 +
+                 PRICING['opus']['output'] * est_out_tokens / 1_000_000)
+    actual_cost = (PRICING[model]['input'] * est_in_tokens / 1_000_000 +
+                   PRICING[model]['output'] * est_out_tokens / 1_000_000)
+    return opus_cost - actual_cost
 
 
 def ensure_log_dir():
@@ -253,21 +331,22 @@ def ensure_log_dir():
                 'timestamp', 'date', 'recommended_model', 'score',
                 'reason', 'prompt_length', 'project_dir',
                 'est_input_cost', 'est_output_cost',
-                'est_input_tokens', 'est_output_tokens'
+                'est_input_tokens', 'est_output_tokens',
+                'est_savings'
             ])
 
 
 def log_routing_decision(model, score, reason, prompt, project_dir):
-    """Append routing decision to CSV log with token-weighted cost estimates."""
+    """Append routing decision to CSV log with savings tracking."""
     try:
         ensure_log_dir()
         now = datetime.now()
         prompt_len = len(prompt)
 
-        # Token-weighted estimation based on actual prompt size
         est_in_tokens, est_out_tokens = estimate_tokens(prompt_len, model)
         est_input_cost = PRICING[model]['input'] * est_in_tokens / 1_000_000
         est_output_cost = PRICING[model]['output'] * est_out_tokens / 1_000_000
+        savings = calculate_savings(model, est_in_tokens, est_out_tokens)
 
         with open(COST_LOG, 'a', newline='') as f:
             writer = csv.writer(f)
@@ -283,9 +362,10 @@ def log_routing_decision(model, score, reason, prompt, project_dir):
                 f'{est_output_cost:.6f}',
                 est_in_tokens,
                 est_out_tokens,
+                f'{savings:.6f}',
             ])
     except Exception:
-        pass  # Never block the user
+        pass
 
 
 def get_daily_summary():
@@ -294,6 +374,7 @@ def get_daily_summary():
         today = date.today().isoformat()
         counts = {'haiku': 0, 'sonnet': 0, 'opus': 0}
         total_est = 0.0
+        total_savings = 0.0
 
         with open(COST_LOG, 'r') as f:
             reader = csv.DictReader(f)
@@ -303,11 +384,12 @@ def get_daily_summary():
                     counts[model] = counts.get(model, 0) + 1
                     total_est += float(row.get('est_input_cost', 0))
                     total_est += float(row.get('est_output_cost', 0))
+                    total_savings += float(row.get('est_savings', 0))
 
         total_prompts = sum(counts.values())
-        return counts, total_prompts, total_est
+        return counts, total_prompts, total_est, total_savings
     except Exception:
-        return {'haiku': 0, 'sonnet': 0, 'opus': 0}, 0, 0.0
+        return {'haiku': 0, 'sonnet': 0, 'opus': 0}, 0, 0.0, 0.0
 
 
 # --- Budget Monitoring ---
@@ -318,7 +400,7 @@ def check_budget():
         with open(BUDGET_FILE, 'r') as f:
             budget = json.load(f)
     except Exception:
-        return None  # No budget set
+        return None
 
     daily_limit = budget.get('daily_limit_usd', None)
     weekly_limit = budget.get('weekly_limit_usd', None)
@@ -326,7 +408,7 @@ def check_budget():
     if not daily_limit and not weekly_limit:
         return None
 
-    counts, total_prompts, daily_est = get_daily_summary()
+    counts, total_prompts, daily_est, _ = get_daily_summary()
 
     alerts = []
     if daily_limit and daily_est > daily_limit * 0.8:
@@ -356,6 +438,7 @@ def main():
             'file_context': analyze_file_context(prompt),
             'inference_depth': analyze_inference_depth(prompt),
             'conversation_depth': analyze_conversation_depth(prompt),
+            'prompt_length': len(prompt),
         }
 
         model, reason, score = score_and_recommend(analysis)
@@ -364,7 +447,7 @@ def main():
         log_routing_decision(model, score, reason, prompt, project_dir)
 
         # Get daily stats
-        counts, total_prompts, daily_est = get_daily_summary()
+        counts, total_prompts, daily_est, daily_savings = get_daily_summary()
 
         # Check budget
         budget_alerts = check_budget()
@@ -374,11 +457,11 @@ def main():
         output_lines = [
             '',
             '+---------------------------------------------------------+',
-            '|  Model Router v3.1 - Cost Optimization                  |',
+            '|  Model Router v4.0 - Cost Optimization                  |',
             '+---------------------------------------------------------+',
             '',
             f'  Analysis:',
-            f'    Keywords: Simple={kw["simple_score"]} Complex={kw["complex_score"]}',
+            f'    Keywords: Simple={kw["simple_score"]} Complex={kw["complex_score"]} Downgrade={kw["downgrade_score"]}',
             f'    Tool Complexity: {analysis["tool_complexity"].upper()}',
             f'    File Context: {analysis["file_context"]}',
             f'    Inference Depth: {analysis["inference_depth"].upper()}',
@@ -392,7 +475,7 @@ def main():
             f'    Haiku:  $0.25   Sonnet: $3.00   Opus: $15.00',
         ]
 
-        # Daily stats
+        # Daily stats with savings
         if total_prompts > 0:
             output_lines += [
                 '',
@@ -400,6 +483,10 @@ def main():
                 f'H:{counts["haiku"]} S:{counts["sonnet"]} O:{counts["opus"]} | '
                 f'Est: ${daily_est:.2f}',
             ]
+            if daily_savings > 0:
+                output_lines.append(
+                    f'  Saved vs all-Opus: ${daily_savings:.2f}'
+                )
 
         # Budget alerts
         if budget_alerts:

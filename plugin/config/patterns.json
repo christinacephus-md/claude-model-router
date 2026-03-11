@@ -3,7 +3,9 @@
     "typo", "format", "rename", "simple", "read file", "show me",
     "what is", "list", "find file", "quick", "view", "display",
     "check", "status", "version", "print", "look at", "open",
-    "see the", "tell me", "which", "cat", "head"
+    "see the", "tell me", "which", "how many", "where is",
+    "count", "summarize", "explain this", "what does",
+    "help me understand", "show", "whats", "what's", "describe"
   ],
   "opus_keywords": [
     "architect", "design system", "refactor entire", "debug across",
@@ -11,11 +13,19 @@
     "migration", "strategy", "tradeoff", "implement from scratch",
     "plan", "audit", "review entire", "redesign", "scale",
     "distributed", "microservices", "infrastructure", "terraform",
-    "think hard", "deep dive", "comprehensive", "surveil",
-    "synthesize", "research", "hipaa", "compliance", "phi",
-    "encryption", "fhir", "hl7", "patient data security",
-    "access control", "audit logging", "data governance",
-    "privacy", "gdpr"
+    "think hard", "deep dive", "comprehensive", "synthesize",
+    "research", "hipaa", "compliance", "phi", "encryption",
+    "fhir", "hl7", "patient data security", "access control",
+    "audit logging", "data governance", "privacy", "gdpr",
+    "from the ground up"
   ],
-  "sonnet_default": true
+  "downgrade_keywords": [
+    "just", "quickly", "briefly", "simply", "only", "small",
+    "minor", "tiny", "tweak", "fix this", "change this",
+    "update this", "add this", "real quick", "one thing",
+    "straightforward", "easy", "basic", "trivial"
+  ],
+  "sonnet_default": true,
+  "_version": "4.0",
+  "_note": "Keywords are now weighted in model_router.py. This file serves as reference and for project overlays."
 }
